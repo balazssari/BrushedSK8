@@ -1,63 +1,63 @@
+#include "Arduino.h"
 #include <SPI.h>
-#include <nRF24L01.h>
 #include <RF24.h>
-
-byte addresses[][6] = {"1Node","2Node"};
 
 RF24 radio(9, 10);
 
-int ThrottleControlPin = 0;
-int val = 0;
-int alarm = 0;
+byte addresses[][6] = {"1Node", "2Node"};
 
+struct Ack {
+  float voltage;
+  float current;
+};
+
+Ack ack;
+
+struct MyData {
+  int val;
+};
+
+MyData data;
 void resetData() 
 {
-  val = 512;
-
+  // 'safe' values to use when no radio input is detected
+  ack.voltage = 0;
 }
-
-
 void setup() {
+  pinMode(3,OUTPUT);
   Serial.begin(9600);
-  
-  pinMode(3,OUTPUT);  //Buzzer
-  
   radio.begin();
+
   radio.setPALevel(RF24_PA_MIN);
-  radio.setDataRate(RF24_2MBPS);
+  radio.setDataRate(RF24_250KBPS);
   radio.setChannel(124);
+  radio.enableAckPayload();
   radio.openWritingPipe(addresses[1]);
-  radio.openReadingPipe(1, addresses[0]);
-  
-  resetData();
+  radio.stopListening();
 }
+
+unsigned long lastRecvTime = 0;
 
 void loop() {
   
-  val = analogRead(ThrottleControlPin);
+  int cal = 0;
+  for(int i=0;i<=4;i++){
+  cal += analogRead(0);
+  }
+  data.val = cal/5;
   
-  //SENDING DATA
-  radio.stopListening();
-
-  if (!radio.write( &val, sizeof(val) )) {
-    Serial.println("No acknowledgement of transmission - receiving radio device connected?");
+  if(radio.write(&data, sizeof(MyData))){
+    if(radio.isAckPayloadAvailable()){
+      radio.read(&ack,sizeof(Ack));
+      lastRecvTime = millis();
+      }
+    }
+    unsigned long now = millis();
+  if ( now - lastRecvTime > 1000 ) {
+    // signal lost?
     resetData();
   }
 
-  //RECEIVING TELEMETRY DATA
-  radio.startListening();
-  unsigned long started_waiting_at = millis();
-  while ( ! radio.available() ) {
-    if (millis() - started_waiting_at > 100 ) {
-      Serial.println("No telemetry received - timeout!");
-      digitalWrite(3,LOW);
-      alarm=0;
-      return;
-    }
-  }
-  if ( radio.available() == 1 ){
-  radio.read( &alarm, sizeof(alarm) );
-  if ( alarm ==  1 ) tone( 3, 1000);
+  Serial.println(ack.voltage);
 
-  }
 }

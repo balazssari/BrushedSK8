@@ -1,6 +1,5 @@
-#include <Servo.h>
+#include "Arduino.h"
 #include <SPI.h>
-#include <nRF24L01.h>
 #include <RF24.h>
 #include<avr/wdt.h>
 //USER SETTINGS
@@ -25,18 +24,34 @@ int t = 10;                                 // loop-time in ms, refresh rate = 1
 //USER SETTINGS END HERE//
 //////////////////////////////////////////////
 
-//NRF24L01 stuff
-byte addresses[][6] = {"1Node","2Node"};
-RF24 radio(9, 10);
-int val = 0;
-int alarm = 0;
-
 float current_limit = 8.0;
 
 int rate=3;
 
-unsigned long lastRecvTime = 0;
+//NRF24L01 stuff
+RF24 radio(9, 10);
 
+byte addresses[][6] = {"1Node","2Node"};
+
+struct Ack {
+  float voltage;
+  float current;
+};
+
+Ack ack;
+
+struct MyData {
+  int val;
+};
+
+MyData data;
+void resetData() 
+{
+  // 'safe' data.values to use when no radio input is detected
+  data.val = 512;
+}
+
+unsigned long lastRecvTime = 0;
 
 // Variables for keeping the cycle-time
 int time_start;
@@ -58,20 +73,17 @@ int throttle = 0;       //Variable for the calculated throttle
 
 int throttle_input=0;
 int brake_input=0;
-
-
-
 /*******************FUNCTIONS**********************/
-void inputValues(){
-  if ( val > middle_point ){
+void inputvalues(){
+  if ( data.val > middle_point ){
     brake_input = 0;
-    throttle_input = ((val-high_threshold)*(1023.0/(1023.0-high_threshold)));
-    if( val < high_threshold ) throttle_input = 0;
+    throttle_input = ((data.val-high_threshold)*(1023.0/(1023.0-high_threshold)));
+    if( data.val < high_threshold ) throttle_input = 0;
   }
-  if ( val < middle_point ){
+  if ( data.val < middle_point ){
     throttle_input = 0;
-    brake_input = abs((val-low_threshold))*(1023.0/low_threshold);
-    if( val > low_threshold ) brake_input = 0;
+    brake_input = abs((data.val-low_threshold))*(1023.0/low_threshold);
+    if( data.val > low_threshold ) brake_input = 0;
   }
   if ( invert_controls == 1 ){
     int storage = throttle_input;
@@ -117,77 +129,54 @@ void throttleCurveCurrent(){
     }
   if ( throttle > 1024 ) throttle = 1024; 
   }
-
-  void resetData(){
-  val = 512;
-  }
+  
 /**************************************************/
 
-
-
-void setup(){ 
+void setup() {
   wdt_enable (WDTO_60MS);                   //The watchdog timer will restart the MC if something's go wrong
-  
-  Serial.begin(19200);
-  
-  pinMode(drive_pin,OUTPUT);
-  pinMode(brake_pin,OUTPUT);
 
+  Serial.begin(9600);
+ 
   radio.begin();
+
   radio.setPALevel(RF24_PA_MIN);
-  radio.setDataRate(RF24_2MBPS);
+  radio.setDataRate(RF24_250KBPS);
   radio.setChannel(124);
-  radio.openWritingPipe(addresses[0]);
+  radio.enableAckPayload();
   radio.openReadingPipe(1, addresses[1]);
-  
-  // Start the radio listening for data
   radio.startListening();
   resetData();
+ 
+
 }
 
-void loop(){
+void loop() {
   time_start=millis();                        //Start a timer for calculating busy loop-time
-  
-if ( radio.available()) {
 
-                                              //Go and read the data and put it into that variable
-    while (radio.available()) {
-      radio.read( &val, sizeof(val));
-      lastRecvTime = millis();
-    }
 
-    radio.stopListening();                    //Stop listening so we can send some telemetry data out to controller
-    radio.write( &alarm, sizeof(alarm) );
-  
-    radio.startListening();                   //Start listening again
+  if(radio.available()){
+    radio.read(&data,sizeof(MyData));
+    radio.writeAckPayload(1, &ack, sizeof(Ack));
+    lastRecvTime = millis();
     }
     
   unsigned long now = millis();
-  if ( now - lastRecvTime > 500 ) {
+  if ( now - lastRecvTime > 1000 ) {
     // signal lost?
-
-      resetData();
-      
+    resetData();
   }
-  
-  inputValues();                              //converting the input from radio to basic throttle-brake values
+
+  inputvalues();                              //converting the input from radio to basic throttle-brake data.values
   
   calcCurrentVoltage();                       //reading and processing data from AD
-
+  ack.voltage = voltage;
+  ack.current = current;
   throttleCurveCurrent();                     //applying the curve for throttle and limit the current
- 
-  
-  if ( voltage < 22.0){
-    alarm = 1;
-    //transmit alarm something to the controller
-    }
   
   //DEBUG HERE:
-  /*
-  Serial.print(throttle);
-  Serial.print("    ");
-  Serial.println(current);
-  */
+  Serial.println(throttle);
+
+  
   // DO NOT CHANGE THIS PART OF CODE
   // ANTI SELF-DESTRUCTION SECTION START
   if(throttle > 0 && brake_input > 0){
@@ -210,5 +199,3 @@ if ( radio.available()) {
   wdt_reset();                                    // Reset if something stuck in
   // ANTI SELF-DESTRUCTION SECTION END
 }
-  
-/**************************************************/
